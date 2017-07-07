@@ -1,0 +1,480 @@
+def init():
+    avialable_namenodes = ['nn1ss.prod.mediav.com', 'nn2ss.prod.mediav.com']
+    for namenode in avialable_namenodes:
+        try:
+            hdfs = PyWebHdfsClient(host=namenode, port='50070', user_name='i-yuanjiajin')
+            hdfs.get_file_dir_status('/')
+            return hdfs
+        except ActiveHostNotFound:
+            print >> sys.stderr, 'trying another active NameNode ...'
+
+hdfs = init()
+
+
+class CtrModel(object):
+
+  def __init__(self, node_list, white_list, feature_num,
+               max_gradient_norm=5, batch_size=64, learning_rate=0.5,
+               learning_rate_decay_factor=0.99,
+               forward_only=False, train_embedding_only=False):
+#feature_num传进来的是个字典类，key是特征名，val是该特征共有多少分类，如{"CreativeName":7191}
+    
+    self.batch_size = batch_size    #一堆成员变量～～～
+    self.learning_rate = tf.Variable(learning_rate, trainable=False, name="learning_rate")
+    self.learning_rate_decay_op = self.learning_rate.assign(    #???variable.assign和tf.assign的区别,name=这里不填会怎么样？
+        self.learning_rate * learning_rate_decay_factor)
+    self.global_step = tf.Variable(0, trainable=False, name="global_step")
+    self.node_list = node_list
+    self.white_list = white_list
+    self.features = {}  #key为特征名，feature张这样{'featurename':indeices,vals} 
+
+    node_map = {}
+    for node in node_list:
+      node_op = node["op"]   #对节点进行什么操作
+      node_id = node["id"]   #节点唯一编号
+      node_dep_ids = node["dep_ids"]    #该节点的父节点们  
+      node_dep_fea = node["dep_fea"]    #node_dep_fea为特征名
+      node_param = node["param"]        #和邮件里有所不同，现在取出来的还是字典形式，{"size":num,"embedding_map":{"1":[1,3,2,21,3],"2":[2,2,2,23],.....} }
+      with tf.variable_scope(str(node_id)):#########????这句话貌似有循环的含义?????
+   #########################################################     
+        if node_op == "Embedding":
+          fsize = feature_num[node_dep_fea]  #该特征的总数
+          emb_size = node_param["size"]   #取emb_size=64，是超参数！！！！！
+          if "embedding_map" in node_param:  #有等于embedding_map的key存在，就会返回True，python独特
+            emb_dict = node_param["embedding_map"]   #依然是dict，例如{"1":[1,3,2,21,3],"2":[2,2,2,23],.....}key值是某个特征的值
+            emb_matric = []    #emb_matric这就是embed层的权重矩阵
+            for i in xrange(fsize):  #从1到fsize循环node_dep_ids
+              v = []
+              for j in xrange(emb_size):   #emb_size必然是个整数
+                v.append(random.uniform(-0.1, 0.1))   #append是list专用函数，生成最小-0.1，最大0.1的随机数加入末尾
+              emb_matric.append(v)   #注意了，每次append一个向量，所以最后组成了一个矩阵
+            for fv in emb_dict:   #对特征的每一个具体值，进行如下操作
+              feature_norm = reduce(lambda x,y: x*x+y*y, emb_dict[fv])
+              if node_dep_fea + '=' + fv in self.white_list and feature_norm > 0.0001:   #node_dep_fea + '=' + fv
+                emb_matric[self.white_list[node_dep_fea + '=' + fv]] = emb_dict[fv]      #上面想表示的是例如 ProvinceId=2这整个字符串
+            emb_initializer = tf.constant(emb_matric)
+          else:
+            emb_initializer = tf.truncated_normal([fsize, emb_size], stddev=0.1)  #产生一组“截断”的正太分布的值
+          #前向的时候，进入else分支
+          if node_dep_fea in self.features:  
+            indices, vals = self.features[node_dep_fea]  #返回key和value
+          else:
+            indices = tf.placeholder(tf.int64, shape=[None, 2], name=node_dep_fea + "_indices") #操作名？？？
+            vals = tf.placeholder(tf.float32, shape=[None], name=node_dep_fea + "_value")
+            self.features[node_dep_fea] = (indices, vals)   #将这组数据加入feature字典，feature的样子已经出来了：{'featurename':indeices,vals}
+          feature_inputs = tf.SparseTensor(indices, vals, [batch_size, fsize])   #这个就是one-hot结果！！！
+        #生成一个稀疏的Tensor，indices例如张这样：[[1,2],[2,3]],代表这2行3列和3行4列不为0，整个tensor的维度是[batchsize,特征总数]，当然维度可以是三维的
+          feature_outputs = self.embedding_layer(feature_inputs, emb_initializer)  #output的维度是512*64！！！o～k！！！
+          node_map[node_id] = (feature_outputs, emb_size)
+   #########################################################
+        if node_op == "Embedding_RNN":        #这段代码干两件事：1）保存每个汉字的参数矩阵 2）这层的输出=参数矩阵×one-hot
+          HIDDEN_SIZE = 200  #设置隐层的unit个数，先放在这里了～
+          fsize = feature_num[node_dep_fea]  #单字的总数，2519个！
+          emb_size = node_param["size"]   #取emb_size=64，是超参数！！！！！
+          #前向的时候，进入else分支,这里不是很确定是不是前向后向的区别～～～～
+          embedding_rnn = tf.get_variable("embedding_rnn", [fsize, HIDDEN_SIZE])   #rnn还要自己再做个embedding为了和隐层数量契合 
+          
+          inputs = tf.nn.embedding_lookup(embedding, self.input_data)
+          
+          
+          
+            
+          self.white_list[node_dep_fea + '=' + fv]
+          if node_dep_fea in self.features:  
+            
+          else:
+            
+          feature_inputs = tf.SparseTensor(indices, vals, [batch_size, fsize])   #这个就是one-hot结果！！！
+        #生成一个稀疏的Tensor，indices例如张这样：[[1,2],[2,3]],代表这2行3列和3行4列不为0，整个tensor的维度是[batchsize,特征总数]，当然维度可以是三维的
+          feature_outputs =   #output的维度是512*64！！！o～k！！！
+          node_map[node_id] = (feature_outputs, emb_size)
+    #########################################################
+        elif node_op == "Group":
+          node_map[node_id] = (self.group_layer([node_map[dep_id][0] for dep_id in node_dep_ids]), node_map[node_dep_ids[0]][1])
+        elif node_op == "Product":
+          in_len = node_map[node_dep_ids[0]][1]
+          in_size = len(node_dep_ids)
+          out_len = int(in_len * in_size * (in_size + 1) / 2)
+          node_map[node_id] = (self.product_layer([node_map[dep_id][0] for dep_id in node_dep_ids]), out_len)
+        elif node_op == "Conn":
+          fc_size = node_param["size"]
+          if "weights" in node_param:
+            fc_weights = node_param["weights"]
+            weight_initializer = tf.constant(fc_weights)
+          else:
+            weight_initializer = tf.truncated_normal([node_map[node_dep_ids[0]][1], fc_size], stddev=0.1)
+          if "bias" in node_param:
+            fc_bias = node_param["bias"]
+            bias_initializer = tf.constant(fc_bias)
+          else:
+            bias_initializer = tf.constant(0.0, shape=[fc_size])
+          node_map[node_id] = (self.full_connect_layer(node_map[node_dep_ids[0]][0], weight_initializer, bias_initializer), fc_size, not train_embedding_only)
+        elif node_op == "Relu":
+          node_map[node_id] = (tf.nn.relu(node_map[node_dep_ids[0]][0]), node_map[node_dep_ids[0]][1])
+        elif node_op == "L2-Norm":
+          node_map[node_id] = (tf.nn.l2_normalize(node_map[node_dep_ids[0]][0], 1), node_map[node_dep_ids[0]][1])
+        elif node_op == "Final":
+          final_output = node_map[node_dep_ids[0]][0]
+
+    self.predicted = tf.sigmoid(final_output)
+
+    self.target = tf.placeholder(tf.float32, shape=[batch_size], name="target")
+
+    self.losses = tf.nn.sigmoid_cross_entropy_with_logits(logits = final_output[:, 0], labels = self.target)
+
+    # Gradients and SGD update operation for training the model.
+    params = tf.trainable_variables()
+    if not forward_only:
+      self.gradient_norms = []   #这下面几个字段都是类变量or成员变量
+      self.updates = []
+      opt = tf.train.GradientDescentOptimizer(self.learning_rate)
+      self.gradients = tf.gradients(self.losses, params)
+      clipped_gradients, norm = tf.clip_by_global_norm(self.gradients, max_gradient_norm)
+      self.gradient_norms.append(norm)
+      self.updates.append(opt.apply_gradients(zip(clipped_gradients, params), global_step=self.global_step))
+
+    self.saver = tf.train.Saver(tf.global_variables())
+
+  def group_layer(self, inputs):   #将有关联的特征做combine，比如八月和夏天两个特征，就不做互相交叉了，合并成一个特征
+    output = None
+    for input_data in inputs:
+      if input_data is None:
+        print("none input")
+      if output is not None:
+        output = output + input_data
+      else:
+        output = input_data
+    return output
+
+  def product_layer(self, inputs):
+    outputs = []
+    for inp in inputs:
+      outputs.append(inp)
+    for i1 in xrange(len(inputs)):
+      for i2 in xrange(len(inputs)):
+        if i1 < i2:
+          outputs.append(inputs[i1] * inputs[i2])
+    return tf.concat(outputs, 1)
+
+  def full_connect_layer(self, input_data, weight_initializer, bias_initializer, need_train=True):
+    W = tf.get_variable("weights", initializer = weight_initializer, trainable=need_train)
+    b = tf.get_variable("bias", initializer = bias_initializer, trainable=need_train)
+    if isinstance(input_data, tf.SparseTensor):
+      return tf.sparse_tensor_dense_matmul(input_data, W) + b
+    else:
+      return tf.matmul(input_data, W) + b
+
+  def embedding_layer(self, input_data, embedding_initializer):  #one-hot及参数矩阵
+    E = tf.get_variable("embeddings", trainable = True, initializer = embedding_initializer) #?从目前来看，是把参数矩阵从tf常量转成了tf变量
+    return tf.sparse_tensor_dense_matmul(input_data, E)
+
+  def step(self, session, input_feed, forward_only):   #输入的input_feed就是下面covert函数最终返回的input_feed
+    if not forward_only:                               ######修改######
+      output_feed = [self.updates,
+                     self.gradient_norms,
+                     self.losses,
+                     self.predicted]
+    else:
+      output_feed = [self.predicted, self.losses]
+
+    outputs = session.run(output_feed, input_feed)
+    if not forward_only:
+      return outputs[1], outputs[2], outputs[3]  # Gradient norm, loss, pctr.
+    else:
+      return None, outputs[1], outputs[0]  # No gradient norm, loss, pctr.
+
+  def convert_data(self, datas):   #datas张下面这个样子， 每次是个512条训练数据的字符串列表，修改！！！#####
+    """convert data             
+       datas: list of str: ["target[\t]feature_name1=feature_val1[ ]feature_name2=feature_val2..."]
+       return: input_feed  
+    """
+    #########修改########   生成每个字的indices和vals
+    input_feed={}    #???到时候要想通什么变量是需要用到占空符的????
+    for fea_name in self.features:
+      input_feed[self.features[fea_name][0].name] = []
+      input_feed[self.features[fea_name][1].name] = []
+    index_sample = 0
+    targets = [0 for _ in xrange(self.batch_size)]  #[0,0,0...] 64个0列表
+    for data in datas:
+      parts = re.split("\t|\n", data)   #split成['1','Browser=3841 CookieLabel=202708273 CookieLabel=404034867']
+      targets[index_sample] = float(parts[0])
+      for fea_and_val in re.split(" ", parts[1]):
+        fea_name = re.split("=", fea_and_val)[0]
+        if fea_name in self.features and fea_and_val in self.white_list:
+          index = self.white_list[fea_and_val]
+          indices = input_feed[self.features[fea_name][0].name]
+          vals = input_feed[self.features[fea_name][1].name]
+          indices.append([index_sample, index])  #indices就是[[2,3],[4,5]],vals是[1,1] 两个一起在SparseTensor表示第3行4列和5行6列的元素为1，其他全部为0 
+          vals.append(1)
+      index_sample += 1
+    for fea_name in self.features:
+      if input_feed[self.features[fea_name][0].name] == []:
+        input_feed[self.features[fea_name][0].name].append((0, 0))
+        input_feed[self.features[fea_name][1].name].append(0)
+    input_feed[self.target.name] = targets
+    return input_feed
+
+  def to_json(self, session):     ####修改###### 保存RNN的参数矩阵
+    for node in self.node_list:
+      node_op = node["op"]
+      node_id = node["id"]
+      node_dep_fea = node["dep_fea"]
+      node_param = node["param"]
+      with tf.variable_scope(str(node_id), reuse=True):
+        if node_op == "Embedding":
+          transformed_param = {}
+          transformed_param["size"] = node_param["size"]
+          emb = session.run(tf.get_variable("embeddings"))
+          emb_dict = {}
+          for fea_and_val in self.white_list:
+            fields = re.split("=", fea_and_val)
+            if node_dep_fea == fields[0]:
+              fea_val = fields[1]
+              fea_val = "1" if fea_val == "true" else ("0" if fea_val == "false" else fea_val)
+              fea_id = long(fea_val)
+              fea_vec = list([round(x, 4) for x in emb[self.white_list[fea_and_val]]])
+              emb_dict[fea_id] = fea_vec
+          transformed_param["embedding_map"] = emb_dict
+          node["param"] = transformed_param
+        elif node_op == "Conn":
+          transformed_param = {}
+          transformed_param["size"] = node_param["size"]
+          weights = session.run(tf.get_variable("weights"))
+          bias = session.run(tf.get_variable("bias"))
+          transformed_param["weights"] = list([list([round(x, 4) for x in w]) for w in weights])
+          transformed_param["bias"] = list([round(x, 4) for x in bias])
+          node["param"] = transformed_param
+    return self.node_list
+
+tf.app.flags.DEFINE_float("learning_rate", 0.5, "Learning rate.")
+tf.app.flags.DEFINE_float("learning_rate_decay_factor", 0.99, "Learning rate decays by this much.")
+tf.app.flags.DEFINE_float("max_gradient_norm", 5.0, "Clip gradients to this norm.")
+tf.app.flags.DEFINE_integer("batch_size", 512, "Batch size to use during training.")
+tf.app.flags.DEFINE_string("old_model", "/user/i-yuanjiajin/pnn/node-meta-st", "old model hdfs path.")
+#tf.app.flags.DEFINE_string("old_model", "/user/zhuyun/node-meta-st", "old model hdfs path.")
+tf.app.flags.DEFINE_string("feature_dic", "/user/zhuyun/ctrprediction-ec/pnn-model-st_pnn/feature-dict/2017-06-21/part-r-00000", "Feature dict hdfs path.")
+tf.app.flags.DEFINE_string("train_data", "/user/zhuyun/ctrprediction-ec/pnn-model-st_pnn/converted-feature", "Training data hdfs path.")
+tf.app.flags.DEFINE_string("eval_data", "/user/zhuyun/ctrprediction-ec/pnn-model-st_pnn/converted-feature", "Evaluation data hdfs path.")
+tf.app.flags.DEFINE_integer("steps_per_checkpoint", 256, "How many training steps to do per checkpoint.")
+tf.app.flags.DEFINE_integer("training_loop", 4, "How many loops.")  #这个4是什么的轮数？？？
+tf.app.flags.DEFINE_boolean("eval", False, "Set to True for evaluation.")
+tf.app.flags.DEFINE_integer("exp_id", 1073774593, "experiment id, e.g. 0x10010001.")
+tf.app.flags.DEFINE_integer("major_version", 20170423, "major version, e.g. date.")
+tf.app.flags.DEFINE_integer("minor_version", 1492876800, "minor version, e.g. timestamp.")
+tf.app.flags.DEFINE_string("model_tag", "1073774593.20170423.1492876800.qj_pnn", "model tag.")
+tf.app.flags.DEFINE_string("output_dir", "/user/i-yuanjiajin/pnn/model", "pnn model hdfs dir.")
+tf.app.flags.DEFINE_boolean("train_embedding", False, "Set to True if train embedding vector only.")
+
+FLAGS = tf.app.flags.FLAGS
+
+def load_old_model_hdfs():   #########修改########node_list里节点结构，看看RNN是不是也要做成多个节点，肯定不要的吧，就1个节点。
+  content = hdfs.read_file(FLAGS.old_model)
+  for model_str in content.split("\n"):
+    model = json.loads(model_str.strip())   #strip函数是python的函数，用去去除头尾制定字符
+    return model["entire_model"]
+
+def load_feature_dic_hdfs(): #就是white_list,张这样{'AdGroupId=14568852': 57, 'AdGroupId=14526470': 46}
+  dic={}                     #就是个哈希表，有遇到重复的值就必须用这里存好的，没办法，onehot就必须这样做
+  dic_CreativeWord={}
+  content = hdfs.read_file(FLAGS.feature_dic)    ######修改#####每个字加入哈希表，以便后面做one-hot
+  pattern = ur'[\u4e00-\u9fa5]'
+  num=0
+  for dict_str in content.split("\n"):
+    if dict_str != "":
+      ps = re.split("\t", dict_str)    #ps张这样：['AdGroupId=14243357', '0'] 1,2,3,4,5这样,但并不能保证是正序，乱序
+      pps = re.split("=", ps[0])       #pps张这样：['AdGroupId', '14243357']
+      if pps[0] == "CreativeName":     #例如pps[1]='1女乔其纱荷叶袖衬衫-728x90.jpg'
+        s = pps[1].decode('utf-8')     #解码成Unicode，原本是utf-8的
+        Chinese_list=re.findall(pattern,s)
+        for i in Chinese_list:
+          if (pps[0]+'='+i) not in dic:
+            num=num+1
+            dic[pps[0]+'='+i]=num      #在dic中加入{'CreativeName=我':'1','CreativeName=爱':'2'}       
+      else:      
+        fv = ps[0]                       #fv张这样：'AdGroupId=14243357'是个字符串
+        if pps[1] == "true":             #？？？？pps[1]何时会等于“true”啊
+          fv = pps[0] + "=1"
+        if pps[1] == "false":            #注意，连着两个if，而不是else，目前来看，没有情况会满足这两个if
+          fv = pps[0] + "=0"
+        dic[fv] = int(ps[1])      
+  return dic
+
+def load_feature_num_hdfs(): #屏幕上就是这个函数负责输出{'Province': 66, 'City': 340, 'AdGroupId': 45971, 'CookieLabel': 32268......}
+  dic={}                     ######修改#####{'CreativeName':distinct中文和英语字母的个数（标点数字统统不要）}
+  dic_CreativeWord={}   #{'我':1,'是':2}，一个单词一个val，只是为了统计有多少个distinct的中文,暂时不管英语，因为英语jpg按理说是一个单词，又更麻烦了
+  content = hdfs.read_file(FLAGS.feature_dic)
+  pattern = ur'[\u4e00-\u9fa5]'
+  num=0   #用于统计中文个数的计数器
+  for dict_str in content.split("\n"):
+    if dict_str != "":
+      ps = re.split("\t", dict_str)    #ps张这样：['AdGroupId=14243357', '0'] 1,2,3,4,5这样,但并不能保证是正序，乱序
+      pps = re.split("=", ps[0])       #pps张这样：['AdGroupId', '14243357']  
+      if pps[0] == "CreativeName":     #例如pps[1]='1女乔其纱荷叶袖衬衫-728x90.jpg'
+        s = pps[1].decode('utf-8')     #解码成Unicode，原本是utf-8的
+        Chinese_list=re.findall(pattern,s)
+        for i in Chinese_list:
+          if i not in dic_CreativeWord:
+            num=num+1
+            dic_CreativeWord[i]=num
+        dic[pps[0]]=num
+      else:
+        if pps[0] in dic:
+          dic[pps[0]] = dic[pps[0]] if dic[pps[0]] > (int(ps[1]) + 1) else (int(ps[1]) + 1) #训练集可能是乱序的,ps[1]可能不是递增的
+        else:
+          dic[pps[0]] = int(ps[1]) + 1 
+  print(dic)
+  return dic 
+
+def list_file(path):
+  file_list = []
+  print(path)
+  response = hdfs.get_file_dir_status(path)
+  stat = response['FileStatus']
+  path_type = stat['type']
+  if path_type == 'DIRECTORY':
+    response = hdfs.list_dir(path)
+    file_stats = response['FileStatuses']['FileStatus']
+    for stat in file_stats:
+      file_list += list_file(path + '/' + stat['pathSuffix'])
+  else:
+    print(path)
+    file_list.append(path)
+  return file_list
+
+def load_data_hdfs(path, model, iter_size):  ####修改，应该也是要的修改的吧，这里会一起step和covert函数，这些函数都是在构建flow图之后####
+  file_list = list_file(path)                ####再考虑处理的问题
+  print("load file %s finish, begin to convert!" % path)
+  queue = Queue.Queue(1000)
+  class io_thread(threading.Thread):
+    def __init__(self):
+      threading.Thread.__init__(self)
+
+    def run(self):
+      data = []
+      for _ in xrange(iter_size):
+        for file_path in file_list:
+          content = hdfs.read_file(file_path)
+          for line in content.split("\n"):
+            if line != "":
+              data.append(line)
+              if len(data) == FLAGS.batch_size:  #这里data是拼接了整个训练集,每次的batchsize为512哦～～～～
+    #张这样：['1\tBrowser=3841 CookieLabel=202708273 CookieLabel=404034867...','...']
+                queue.put(model.convert_data(data))
+                data = []
+      if data != []:
+        queue.put(model.convert_data(data))  #每次扔512条训练数据进队列里
+
+  t = io_thread()
+  t.setDaemon(True)
+  t.start()
+  while t.isAlive() or not queue.empty():
+    yield queue.get()
+def create_model(sess, forward_only=False):
+  model = CtrModel(load_old_model_hdfs(), load_feature_dic_hdfs(), load_feature_num_hdfs(),
+            batch_size = FLAGS.batch_size, max_gradient_norm = FLAGS.max_gradient_norm, forward_only=forward_only,
+            learning_rate = FLAGS.learning_rate, learning_rate_decay_factor = FLAGS.learning_rate_decay_factor,
+            train_embedding_only=FLAGS.train_embedding)
+  print("Created model.")
+  sess.run(tf.global_variables_initializer())  #run中的函数返回op操作，这个操作将所有全局变量初始化
+  return model
+
+def train():
+  step = 0
+  previous_losses = []
+  loss_sum = norm_sum = 0.0
+  config = tf.ConfigProto()  #配置类
+  config.gpu_options.allow_growth = True  #做配置
+  with tf.Session(config=config) as sess:  #with用法来自动关闭sess类，从而释放资源
+    model = create_model(sess)
+    auc_tensor = tf.Variable(tf.constant(0.5))
+    copc_tensor = tf.Variable(tf.constant(0.5))
+    tf.summary.scalar('auc', auc_tensor)
+    tf.summary.scalar('copc', copc_tensor)
+    merged = tf.summary.merge_all()  #由于之前定义了非常多的tf.summary的汇总操作，一一执行这些操作态麻烦， 
+            #所以这里使用tf.summary.merger_all()直接获取所有汇总操作，以便后面执行。定义合并变量操作，一次性生成所有摘要数据  
+    sess.run(tf.global_variables_initializer())   #run中的函数返回op操作，这个操作将所有全局变量初始化
+    train_writer = tf.summary.FileWriter('/logs/pnn-model/train', sess.graph)   #定义写入摘要数据到事件日志的操作 
+                              #是为了后续在tensorBoard上展示的
+    pt_list = []
+    for data in load_data_hdfs(FLAGS.train_data, model, FLAGS.training_loop):
+      step += 1
+      norm, loss, predicted = model.step(sess, data, False)
+      for pctr, isclick in zip(predicted[:,0], data[model.target.name]):
+        pt_list.append((pctr, isclick))
+      if False:    #？？？？这个False是什么套路？？？
+        auc, copc = eval_data(pt_list)
+        auc_tensor.assign(auc)
+        copc_tensor.assign(copc)      
+        summary, _, _ = sess.run([merged, auc_tensor, copc_tensor])
+        train_writer.add_summary(summary, step)
+      loss_sum += reduce(lambda x, y: x + y, loss)
+      norm_sum += reduce(lambda x, y: x + y, norm)
+      if step % FLAGS.steps_per_checkpoint == 0:
+        print("step %d, average loss: %.3f, norm: %.3f, "
+               "learning rate: %.3f" % (model.global_step.eval(session=sess),
+               loss_sum / FLAGS.steps_per_checkpoint / FLAGS.batch_size,
+               norm_sum / FLAGS.steps_per_checkpoint / FLAGS.batch_size,
+               model.learning_rate.eval(session=sess)))
+        if len(previous_losses) > 1 and loss_sum > max(previous_losses[-2:]):
+          sess.run(model.learning_rate_decay_op)
+        previous_losses.append(loss_sum)
+        previous_losses = previous_losses[-3:]
+        loss_sum = 0.0
+        norm_sum = 0.0
+        sys.stdout.flush()
+    save(sess, model)        
+
+def eval_data(data, bin_size = 10000):
+  p = [0] * (bin_size + 1)
+  n = [0] * (bin_size + 1)
+  click_sum = 0.0
+  pctr_sum = 0.0
+  for v in data:
+    pctr_sum += v[0]
+    click_sum += v[1]
+    p[int(v[0] * bin_size)] += v[1]
+    n[int(v[0] * bin_size)] += 1 - v[1]
+  for i in xrange(bin_size, 0, -1):
+    p[i-1] += p[i]
+    n[i-1] += n[i]
+  s = p[bin_size] * n[bin_size] / 2
+  for i in xrange(bin_size, 0, -1):
+    s += (p[i] + p[i-1]) * (n[i-1] - n[i]) / 2
+
+  return s / p[0] / n[0], click_sum / pctr_sum
+
+def eval():
+  step = 0
+  config = tf.ConfigProto()
+  config.gpu_options.allow_growth = True
+  with tf.Session(config=config) as sess:
+    pt_list = []
+    model = create_model(sess, True)
+    for data in load_data_hdfs(FLAGS.eval_data, model, 1):
+      step += 1
+      _, _, predicted = model.step(sess, data, True)
+      for pctr, isclick in zip(predicted[:,0], data[model.target.name]):
+        pt_list.append((pctr, isclick))
+      if step % 100 == 0:
+        auc, copc = eval_data(pt_list)
+        print("%d sample evaluated, current auc: %.3f, copc: %.3f " % (step * FLAGS.batch_size, auc, copc))
+        sys.stdout.flush()
+
+def save(sess, model):
+  pnn_model_info = {}
+  pnn_model_info["exp_id"] = FLAGS.exp_id
+  pnn_model_info["major_version"] = FLAGS.major_version
+  pnn_model_info["minor_version"] = FLAGS.minor_version
+  pnn_model_info["model_tag"] = FLAGS.model_tag
+  pnn_model_info["entire_model"] = model.to_json(sess)
+  hdfs.make_dir(FLAGS.output_dir)
+  hdfs.create_file(FLAGS.output_dir + "/model", json.dumps(pnn_model_info))
+
+def main(_):
+  if FLAGS.eval:
+    eval()
+  else:
+    train()
+
+if __name__ == "__main__":
+  tf.app.run()
