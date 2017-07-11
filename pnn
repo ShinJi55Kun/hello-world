@@ -68,26 +68,28 @@ class CtrModel(object):
           node_map[node_id] = (feature_outputs, emb_size)
    #########################################################
         if node_op == "Embedding_RNN":        #这段代码干两件事：1）保存每个汉字的参数矩阵 2）这层的输出=参数矩阵×one-hot
-          HIDDEN_SIZE = 200  #设置隐层的unit个数，先放在这里了～
+          HIDDEN_SIZE = 64  #设置隐层的unit个数，先放在这里了～
+          keep_prob = 0.5
+          num_steps = 5
           fsize = feature_num[node_dep_fea]  #单字的总数，2519个！
           emb_size = node_param["size"]   #取emb_size=64，是超参数！！！！！
           #前向的时候，进入else分支,这里不是很确定是不是前向后向的区别～～～～
-          embedding_rnn = tf.get_variable("embedding_rnn", [fsize, HIDDEN_SIZE])   #rnn还要自己再做个embedding为了和隐层数量契合 
-          
-          inputs = tf.nn.embedding_lookup(embedding, self.input_data)
-          
-          
-          
-            
-          self.white_list[node_dep_fea + '=' + fv]
-          if node_dep_fea in self.features:  
-            
-          else:
-            
-          feature_inputs = tf.SparseTensor(indices, vals, [batch_size, fsize])   #这个就是one-hot结果！！！
-        #生成一个稀疏的Tensor，indices例如张这样：[[1,2],[2,3]],代表这2行3列和3行4列不为0，整个tensor的维度是[batchsize,特征总数]，当然维度可以是三维的
-          feature_outputs =   #output的维度是512*64！！！o～k！！！
-          node_map[node_id] = (feature_outputs, emb_size)
+          cell = tf.contrib.rnn.BasicRNNCell(HIDDEN_SIZE)
+          initial_state = cell.zero_state(batch_size, tf.float32)    #例子代码都用了self.initial_state,先不管
+          embedding_rnn = tf.get_variable("embedding_rnn", [fsize, HIDDEN_SIZE],dtype=tf.float32)   #rnn还要自己再做个embedding为了和隐层数量契合 
+          feature_inputs = tf.placeholder(tf.int64, shape=[batch_size,None], name=node_dep_fea + "_value")    #feature_inputs是512*10个ids
+          #做个padding
+          inputs = tf.nn.embedding_lookup(embedding_rnn, feature_inputs)  #扔进rnn自己的embedding层
+          if not forward_only and keep_prob < 1:   #若训练则进dropout
+            inputs = tf.nn.dropout(inputs, keep_prob)
+          feature_outputs = []     
+          state = initial_state
+          with tf.variable_scope("RNN"):
+            for time_step in range(num_steps):
+              if time_step > 0: tf.get_variable_scope().reuse_variables()
+              (cell_output, state) = cell(inputs[:, time_step, :], state)  #cell_output的shape和state一样，state暂定为512*10
+         #原本lstm会用append将所有output append起来成一个三维的张量，512*64×10即batch*units*num_steps，然而我只取finalstate，所以就成了512*64,这就是我最终的output了
+          node_map[node_id] = (cell_output, emb_size)      
     #########################################################
         elif node_op == "Group":
           node_map[node_id] = (self.group_layer([node_map[dep_id][0] for dep_id in node_dep_ids]), node_map[node_dep_ids[0]][1])
@@ -165,11 +167,11 @@ class CtrModel(object):
       return tf.matmul(input_data, W) + b
 
   def embedding_layer(self, input_data, embedding_initializer):  #one-hot及参数矩阵
-    E = tf.get_variable("embeddings", trainable = True, initializer = embedding_initializer) #?从目前来看，是把参数矩阵从tf常量转成了tf变量
+    E = tf.get_variable("embeddings", trainable = True, initializer = embedding_initializer) #?创建tesnor变量，并给予初始值
     return tf.sparse_tensor_dense_matmul(input_data, E)
 
   def step(self, session, input_feed, forward_only):   #输入的input_feed就是下面covert函数最终返回的input_feed
-    if not forward_only:                               ######修改######
+    if not forward_only:                               ######修改######然后从这里，传进了session。使得
       output_feed = [self.updates,
                      self.gradient_norms,
                      self.losses,
@@ -190,29 +192,46 @@ class CtrModel(object):
     """
     #########修改########   生成每个字的indices和vals
     input_feed={}    #???到时候要想通什么变量是需要用到占空符的????
-    for fea_name in self.features:
-      input_feed[self.features[fea_name][0].name] = []
-      input_feed[self.features[fea_name][1].name] = []
+    for fea_name in self.features:   #features张这样{'featurename':indeices,vals}
+      if fea_name != 'CreativeName':
+        input_feed[self.features[fea_name][0].name] = []    #.name就认为是indeices,因为传入的是tensor，所以有name
+        input_feed[self.features[fea_name][1].name] = []    #.name认为是vals吧～
+      else:
+        input_feed[fea_name] = []    #input_feed中多个CreativeName的key，目前是list，但是每次append一个向量，组成一个512*10的矩阵  
     index_sample = 0
-    targets = [0 for _ in xrange(self.batch_size)]  #[0,0,0...] 64个0列表
-    for data in datas:
+    targets = [0 for _ in xrange(self.batch_size)]  #[0,0,0...] 512个0列表
+    for data in datas:          #data是一条样本数据
       parts = re.split("\t|\n", data)   #split成['1','Browser=3841 CookieLabel=202708273 CookieLabel=404034867']
-      targets[index_sample] = float(parts[0])
-      for fea_and_val in re.split(" ", parts[1]):
-        fea_name = re.split("=", fea_and_val)[0]
-        if fea_name in self.features and fea_and_val in self.white_list:
+      targets[index_sample] = float(parts[0])        #parts[1]:'Browser=3841 CookieLabel=202708273 CookieLabel=404034867'
+      for fea_and_val in re.split(" ", parts[1]):    #fea_and_val张这样：'CookieLabel=202708273'或者'CreativeName=\xe4\xb8\xad'
+        if 'word' in fea_and_val or '='not in fea_and_val:
+          continue
+        fea_name = re.split("=", fea_and_val)[0]       # white_list: {CreativeName='我':1,CreativeName='是':2.....}
+        cre_name = re.split("=", fea_and_val)[1]     #cre_name是中文字符串
+        pattern = ur'[\u4e00-\u9fa5]'
+        cre_name = cre_name.decode('utf-8')     #解码成Unicode，原本是utf-8的
+        Chinese_list=re.findall(pattern,cre_name)
+        if fea_name in self.features and fea_and_val in self.white_list and fea_name!='CreativeName':
+          print('savosavosavosavo')
           index = self.white_list[fea_and_val]
-          indices = input_feed[self.features[fea_name][0].name]
-          vals = input_feed[self.features[fea_name][1].name]
+          indices = input_feed[self.features[fea_name][0].name]  #取indices指针了，
+          vals = input_feed[self.features[fea_name][1].name]     #取vals指针，所以下面两行就是修改input_feed里面的内容了
           indices.append([index_sample, index])  #indices就是[[2,3],[4,5]],vals是[1,1] 两个一起在SparseTensor表示第3行4列和5行6列的元素为1，其他全部为0 
           vals.append(1)
+        if fea_name=='CreativeName' and fea_name in self.features:
+          print('momomomomom')
+          for Chinese_word in Chinese_list:
+            if Chinese_word in self.white_list:
+              word_index = self.white_list[Chinese_word]
+              indices = input_feed[fea_name]
+              indices.append(word_index)
       index_sample += 1
     for fea_name in self.features:
-      if input_feed[self.features[fea_name][0].name] == []:
+      if input_feed[self.features[fea_name][0].name] == []:     #若一条训练数据的indices为空的处理，补上0，暂时不用考虑～
         input_feed[self.features[fea_name][0].name].append((0, 0))
         input_feed[self.features[fea_name][1].name].append(0)
     input_feed[self.target.name] = targets
-    return input_feed
+    return input_feed    #张这样，{'target:0':[0.0,0.0,1.0.....],}
 
   def to_json(self, session):     ####修改###### 保存RNN的参数矩阵
     for node in self.node_list:
